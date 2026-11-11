@@ -20,7 +20,7 @@ const fail = m => { problems++; bad(m); };
 
 let cfg;
 try { cfg = JSON.parse(fs.readFileSync(path.join(DIR, 'config.json'), 'utf8')); }
-catch { console.log('FAIL  config.json is missing or broken. Run start-kanairy.bat once, it creates it.'); process.exit(1); }
+catch { console.log('FAIL  config.json is missing. The doctor checks the single-account layout. With multiple accounts, settings live in ProgramData\Kanairy and each person has their own folder under users.'); process.exit(1); }
 
 if (!cfg.eaPort || Number(cfg.eaPort) === 8765) {
   // MetaTrader's WebRequest only reaches the standard web ports, so the EA bridge must be on port 80.

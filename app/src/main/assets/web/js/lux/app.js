@@ -18,6 +18,17 @@ function applyTheme(t) {
 }
 applyTheme(theme());
 
+// Cards float in one after another, and the highlight in the bar glides to the tab.
+function stagger(name) {
+  requestAnimationFrame(() => $('s-' + name).querySelectorAll('h1, .lead, .hero, .crownwrap, .hint, .card, .trio').forEach((el, i) => el.style.setProperty('--i', Math.min(i, 9))));
+}
+function placeInd() {
+  const nav = $('nav'), ind = nav.querySelector('.ind'), b = nav.querySelector('button[aria-current]');
+  if (!ind || !b) return;
+  ind.style.width = b.offsetWidth + 'px'; ind.style.transform = 'translateX(' + b.offsetLeft + 'px)';
+}
+addEventListener('resize', () => placeInd());
+
 function go(name) {
   cur = name;
   TABS.forEach(([k]) => $('s-' + k).classList.toggle('on', k === name));
@@ -26,6 +37,7 @@ function go(name) {
   if (name === 'account') account.render();
   if (name === 'setup') setup.render();
   if (name === 'live') live.tick();
+  stagger(name); placeInd();
   scrollTo(0, 0);
   try { history.replaceState(null, '', '#' + name); } catch { /* ignore */ }
 }
@@ -36,13 +48,14 @@ function setPill(kind, text) {
   $('connTxt').textContent = text;
 }
 
-$('nav').replaceChildren(...TABS.map(([k, l]) => h('button', { 'data-k': k, onclick: () => go(k) }, icon(k, 22), h('span', {}, l))));
+$('nav').replaceChildren(h('span', { class: 'ind' }), ...TABS.map(([k, l]) => h('button', { 'data-k': k, onclick: () => go(k) }, icon(k, 22), h('span', {}, l))));
 B.onError = toast;
 live = mountLive($('s-live'), go, setPill);
 strategy = mountStrategy($('s-strategy'), () => live.tick());
 account = mountAccount($('s-account'), () => live.tick());
 setup = mountSetup($('s-setup'), applyTheme, theme);
 
+window.__go = go;
 window.__back = () => { if (cur !== 'live') { go('live'); return true; } return false; };
 const start = location.hash.slice(1);
 go(TABS.some(t => t[0] === start) ? start : 'live');

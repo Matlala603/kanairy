@@ -47,3 +47,14 @@ In the app, Strategy tab, **Import an EA**. Pick a `.mq5` source (this server co
 - The Live screen's stop button shuts MT5 down so the EA cannot trade. Open trades stay open with their broker stops.
 - **Back to my XML strategy** switches back to KanairyEA. Imported files live in MT5's `MQL5\Experts\Imported` folder; compile output is in `data\ea-compile.log`.
 - Only import EAs you own or are licensed to use.
+
+## Many people on one VPS (up to 10)
+`start-kanairy.bat` now starts the **gateway**. One public port, **one app key for everyone**, and each person has their own name and PIN.
+- **One app key, one EA key, forever.** They are created once and stored in `C:\ProgramData\Kanairy` (not in this folder), so replacing the `vps` folder never changes them. If you already had a key in `vps\config.json`, it is kept.
+- **In the app:** Setup, enter the address and the app key once, then **Create account** (name + PIN). On another phone, use **Sign in** with the same name and PIN.
+- **Each person is separate:** their own broker login, strategy, imported EAs, settings and their own private copy of MT5 (copied automatically the first time, a few minutes). Nobody sees anyone else's account.
+- **Server size:** each MT5 uses roughly 300 to 600 MB of RAM and about 400 MB of disk. For 10 people plan for 8 GB RAM or more.
+- **Limits:** 10 accounts by default (`maxUsers` in `ProgramData\Kanairy\gateway.json`). 8 wrong PINs lock that account for 5 minutes. Deleting an account in the app removes its files and private MT5.
+- **Start and stop an imported EA from the phone:** with an imported `.mq5` or `.ex5`, hold the crown to start MT5 with it, tap to stop it. Stopping shuts down only that person's MT5.
+- The old single-account `server.js` still works if you run it directly, but the gateway is the normal way now. Close any old "Kanairy server" window before starting the gateway, because both use port 8766.
+- Everyone's EA talks to the server on its own private address (127.0.1.x, port 80), all with the same EA key.

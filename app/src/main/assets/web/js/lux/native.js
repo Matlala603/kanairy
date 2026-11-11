@@ -20,13 +20,19 @@ function req(method, path, body) {
 }
 
 // ---------- cache the UI reads from ----------
-const C = { status: {}, feed: [], strat: null, stratRev: -1, link: N ? 'unconfigured' : 'ok', vps: { url: '', hasKey: false }, n: 0, busy: false };
+const C = { status: {}, feed: [], strat: null, stratRev: -1, link: N ? 'unconfigured' : 'ok', vps: { url: '', hasKey: false, user: '' }, hello: null, n: 0, busy: false };
 async function poll() {
   if (!N || C.busy) return;
   C.busy = true;
   try {
-    C.vps = parse(N.vpsInfo(T), { url: '', hasKey: false });
+    C.vps = parse(N.vpsInfo(T), { url: '', hasKey: false, user: '' });
     if (!C.vps.url || !C.vps.hasKey) { C.link = 'unconfigured'; return; }
+    if (!C.vps.user) { // shared key only: check the server and wait for sign-in
+      const h = await req('GET', '/api/hello');
+      C.link = h.status === 200 ? 'nouser' : h.status === 401 ? 'badkey' : 'offline';
+      C.hello = h.status === 200 ? parse(h.text, null) : null; C.status = {};
+      return;
+    }
     const r = await req('GET', '/api/status');
     if (r.status === 200) {
       C.link = 'ok';
@@ -36,7 +42,7 @@ async function poll() {
         if (s.status === 200) { C.strat = parse(s.text, {}).strategy || null; C.stratRev = C.status.rev; }
       }
       if (C.n++ % 2 === 0) { const f = await req('GET', '/api/feed'); if (f.status === 200) C.feed = parse(f.text, []); }
-    } else C.link = r.status === 401 ? 'badkey' : 'offline';
+    } else C.link = r.status === 401 ? 'badpin' : r.status === 429 ? 'locked' : 'offline';
   } finally { C.busy = false; }
 }
 if (N) { setInterval(poll, 1500); poll(); }
@@ -61,7 +67,7 @@ function demoTick() {
 if (!N) setInterval(demoTick, 1800);
 
 // ---------- public API ----------
-const LINK_TEXT = { unconfigured: 'Connect your server in Setup first', offline: 'Cannot reach your server. Check the address and that it is running', badkey: 'The server rejected your key. Check it in Setup' };
+const LINK_TEXT = { unconfigured: 'Connect your server in Setup first', offline: 'Cannot reach your server. Check the address and that it is running', badkey: 'The server rejected your key. Check it in Setup', nouser: 'Sign in on the Setup tab first', badpin: 'Wrong name or PIN. Sign in again on the Setup tab', locked: 'Too many wrong PINs. Try again in a few minutes' };
 const linkOk = () => { if (!N || C.link === 'ok') return true; B.onError(LINK_TEXT[C.link] || 'Server not connected'); return false; };
 
 export const B = {
@@ -134,4 +140,31 @@ export const B = {
     poll(); return parse(r.text, { ok: false, error: 'No answer from the server' });
   },
   saveVps(url, key) { if (N) N.saveVps(T, url, key); },
+  // ---- accounts: one shared app key, then a name and PIN for each person ----
+  user: () => (N ? (C.vps.user || '') : 'preview'),
+  hello: () => C.hello || null,
+  async signIn(name, pin) {
+    if (!N) return { ok: true };
+    N.saveUser(T, name, pin);
+    const r = await req('GET', '/api/me');
+    if (r.status === 200) { C.status = {}; C.stratRev = -1; await poll(); return { ok: true }; }
+    N.clearUser(T); poll();
+    return { ok: false, error: r.status === 401 ? 'Wrong name or PIN' : r.status === 429 ? 'Too many wrong PINs. Try again in a few minutes.' : 'Cannot reach your server' };
+  },
+  async createAccount(name, pin) {
+    if (!N) return { ok: true };
+    const key = N.deriveUserKey(T, name, pin);
+    if (!key) return { ok: false, error: 'Save the server key first' };
+    const r = await req('POST', '/api/register', { name, userKey: key });
+    const j = parse(r.text, { ok: false, error: r.status === 401 ? 'The server rejected the app key' : 'Cannot reach your server' });
+    if (!j.ok) return j;
+    return B.signIn(name, pin);
+  },
+  signOut() { if (N) { N.clearUser(T); C.status = {}; C.stratRev = -1; poll(); } },
+  async deleteAccount() {
+    if (!N) return { ok: true };
+    const r = await req('POST', '/api/account/delete', {});
+    if (r.status === 200) { N.clearUser(T); C.status = {}; poll(); return { ok: true }; }
+    return { ok: false, error: 'Could not delete. Try again.' };
+  },
 };

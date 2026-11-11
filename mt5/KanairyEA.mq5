@@ -11,6 +11,7 @@
 #include <Trade/Trade.mqh>
 
 input string InpToken     = "";      // Token printed by the Kanairy server (Launch MT5 fills it in)
+input string InpHost      = "127.0.0.1"; // Bridge address (each person on a shared server gets their own)
 input int    InpPort      = 80;      // Bridge port (MetaTrader only reaches the standard web ports, so this is 80)
 input int    InpPollMs     = 150;     // How often to talk to the server (ms). Lower is faster.
 input int    InpBars      = 300;     // Closed candles sent to the strategy
@@ -24,7 +25,7 @@ bool     g_online      = false;
 string   g_status      = "starting";
 int      g_fail        = 0;
 
-string Base() { return InpPort == 80 ? "http://127.0.0.1" : "http://127.0.0.1:" + IntegerToString(InpPort); }
+string Base() { return InpPort == 80 ? "http://" + InpHost : "http://" + InpHost + ":" + IntegerToString(InpPort); }
 string Url(const string path) { return Base() + path; }
 
 //--- HTTP --------------------------------------------------------------

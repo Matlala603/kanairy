@@ -10,9 +10,11 @@ import { execFile, spawn } from 'node:child_process';
 import { patchSection } from './mt5ini.js';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
-const DATA = path.join(DIR, 'data');
+// KANAIRY_HOME lets the gateway run one copy of this server per person, each with its own settings and data.
+const HOME = process.env.KANAIRY_HOME || DIR;
+const DATA = path.join(HOME, 'data');
 fs.mkdirSync(DATA, { recursive: true });
-const CFG_FILE = path.join(DIR, 'config.json');
+const CFG_FILE = path.join(HOME, 'config.json');
 const STATE_FILE = path.join(DATA, 'state.json');
 const SECRET_FILE = path.join(DATA, 'secrets.json');
 const INI_FILE = path.join(DATA, 'kanairy-start.ini');
@@ -27,13 +29,16 @@ const defaults = {
   mt5DataDir: '', // File > Open Data Folder in MT5, e.g. C:\\Users\\you\\AppData\\Roaming\\MetaQuotes\\Terminal\\ABC123
   allowLive: false,
   autoLaunch: true, // start MT5 by itself when the server starts, and again if it dies
+  appHost: '0.0.0.0', eaHost: '127.0.0.1', // the gateway gives each person their own private addresses
+  portable: false, // true = this server owns a private MT5 copy (one per person)
+  quiet: false,
 };
 let fresh = false;
 for (const [k, v] of Object.entries(defaults)) if (cfg[k] === undefined) { cfg[k] = v; fresh = true; }
 // MetaTrader's WebRequest only talks to the standard web ports (80 for http), so the EA bridge lives on port 80.
 if (!cfg.eaPort || Number(cfg.eaPort) === 8765) { cfg.eaPort = 80; fresh = true; }
 if (fresh) fs.writeFileSync(CFG_FILE, JSON.stringify(cfg, null, 2));
-const eaUrl = () => 'http://127.0.0.1' + (Number(cfg.eaPort) === 80 ? '' : ':' + cfg.eaPort);
+const eaUrl = () => 'http://' + (cfg.eaHost || '127.0.0.1') + (Number(cfg.eaPort) === 80 ? '' : ':' + cfg.eaPort);
 
 // ---------- strategy engine (the same code as the app's Strategy lab) ----------
 globalThis.window = globalThis;
@@ -182,10 +187,10 @@ function status() {
     sym: L.sym, tf: L.tf, bid: L.bid, ask: L.ask, bal: L.bal, eq: L.eq, spread: L.spread, hedge: L.hedge, pos: L.pos,
     dayPnl: +S.dayPnl.toFixed(2), dayTrades: S.dayTrades, wins: S.wins, losses: S.losses, signal: L.signal, err: L.err,
     strategy: S.strategy ? S.strategy.name : '', rev: S.rev,
-    info: { login: S.login, server: S.server, hasPw: S.hasPw, symbol: S.symbol, tf: S.tf, allowLive: !!cfg.allowLive, mt5Ready: !!cfg.mt5Path && !!cfg.mt5DataDir },
+    info: { login: S.login, server: S.server, hasPw: S.hasPw, symbol: S.symbol, tf: S.tf, allowLive: !!cfg.allowLive, mt5Ready: !!cfg.mt5Path && !!cfg.mt5DataDir, portable: !!cfg.portable },
     cfg: S.guards,
     mt5Up: L.mt5Up, hint: hint(now),
-    ea: { mode: isCustom() ? 'custom' : 'kanairy', name: S.ea.name, state: S.ea.state, log: S.ea.log, hasPreset: !!S.ea.hasPreset },
+    ea: { mode: isCustom() ? 'custom' : 'kanairy', name: S.ea.name, state: S.ea.state, log: S.ea.log, hasPreset: !!S.ea.hasPreset, running: isCustom() && L.mt5Up && !L.stopped },
   };
 }
 
@@ -228,10 +233,19 @@ function writeStartFiles() {
   if (cfg.mt5DataDir) {
     const dir = path.join(cfg.mt5DataDir, 'MQL5', 'Presets');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'kanairy.set'), `InpToken=${cfg.eaToken}\r\nInpPort=${cfg.eaPort}\r\nInpAllowLive=${cfg.allowLive ? 'true' : 'false'}\r\n`);
+    fs.writeFileSync(path.join(dir, 'kanairy.set'), `InpToken=${cfg.eaToken}\r\nInpHost=${cfg.eaHost || '127.0.0.1'}\r\nInpPort=${cfg.eaPort}\r\nInpAllowLive=${cfg.allowLive ? 'true' : 'false'}\r\n`);
   }
   patchCommon();
   setTimeout(() => fs.unlink(INI_FILE, () => {}), 90000); // MT5 reads it at startup; remove the password afterwards
+}
+
+// Stop / detect this person's MT5 only. A private (portable) copy is matched by its path, so one person's stop never touches another's.
+const psq = x => String(x).replace(/'/g, "''");
+const psMatch = () => `Get-CimInstance Win32_Process -Filter "Name='terminal64.exe'" | Where-Object { $_.ExecutablePath -ieq '${psq(cfg.mt5Path)}' }`;
+function killMt5(cb) {
+  if (process.platform !== 'win32') { if (cb) cb(); return; }
+  if (cfg.portable) execFile('powershell', ['-NoProfile', '-Command', `${psMatch()} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`], () => { if (cb) cb(); });
+  else execFile('taskkill', ['/IM', 'terminal64.exe', '/F'], () => { if (cb) cb(); });
 }
 
 async function launchMt5() {
@@ -241,15 +255,25 @@ async function launchMt5() {
   if (isCustom() && !fs.existsSync(path.join(cfg.mt5DataDir || '', 'MQL5', 'Experts', 'Imported', S.ea.name + '.ex5'))) return { ok: false, error: 'The imported EA is not compiled on the server. Import it again.' };
   L.stopped = false;
   writeStartFiles();
+  // MT5 reopens its saved charts, EA included, and that keeps the old EA on the chart. Drop saved charts that hold the other EA so the startup file attaches the right one.
+  const cleanCharts = () => {
+    try {
+      const dir = path.join(cfg.mt5DataDir || '', 'Profiles', 'Charts', 'Default');
+      const drop = isCustom() ? /KanairyEA/i : /Imported\\/i;
+      for (const f of fs.readdirSync(dir)) if (/\.chr$/i.test(f) && drop.test(readText(path.join(dir, f)))) { fs.unlinkSync(path.join(dir, f)); log('Cleared saved chart', f); }
+    } catch { /* no saved charts */ }
+  };
   const start = () => {
-    const child = process.platform === 'win32' ? spawn(cfg.mt5Path, ['/config:' + INI_FILE], { detached: true, stdio: 'ignore' }) : spawn('wine', [cfg.mt5Path, '/config:' + INI_FILE], { detached: true, stdio: 'ignore' });
+    cleanCharts();
+    const args = [...(cfg.portable ? ['/portable'] : []), '/config:' + INI_FILE];
+    const child = process.platform === 'win32' ? spawn(cfg.mt5Path, args, { detached: true, stdio: 'ignore' }) : spawn('wine', [cfg.mt5Path, ...args], { detached: true, stdio: 'ignore' });
     child.on('error', e => log('MT5 launch failed:', e.message));
     child.unref();
     log('MT5 started');
     L.launchedAt = Date.now();
   };
   L.launchedAt = Date.now();
-  if (process.platform === 'win32') execFile('taskkill', ['/IM', 'terminal64.exe', '/F'], () => setTimeout(start, 2500));
+  if (process.platform === 'win32') killMt5(() => setTimeout(start, 2500));
   else start();
   addFeed('sys', 'MT5 restarting with your login');
   return { ok: true };
@@ -258,6 +282,7 @@ async function launchMt5() {
 // ---------- one-click setup: find MT5, install and compile the EA, show the phone address ----------
 const saveCfg = () => fs.writeFileSync(CFG_FILE, JSON.stringify(cfg, null, 2));
 function findMt5() {
+  if (cfg.portable) return cfg.mt5Path && fs.existsSync(cfg.mt5Path) ? cfg.mt5Path : '';
   if (cfg.mt5Path && fs.existsSync(cfg.mt5Path)) return cfg.mt5Path;
   const roots = new Set([process.env.ProgramFiles, process.env['ProgramFiles(x86)'], 'C:\\Program Files', 'C:\\Program Files (x86)'].filter(Boolean));
   for (const r of roots) {
@@ -298,7 +323,7 @@ function autoSetup() {
       if (!exe) { log('MT5 not found. Install MetaTrader 5, open it once, then restart this server.'); return done(); }
       let changed = false;
       if (cfg.mt5Path !== exe) { cfg.mt5Path = exe; changed = true; }
-      if (!cfg.mt5DataDir || !fs.existsSync(cfg.mt5DataDir)) { cfg.mt5DataDir = findDataDir(exe); changed = !!cfg.mt5DataDir || changed; }
+      if (!cfg.mt5DataDir || !fs.existsSync(cfg.mt5DataDir)) { cfg.mt5DataDir = cfg.portable ? path.dirname(exe) : findDataDir(exe); changed = !!cfg.mt5DataDir || changed; }
       if (changed) saveCfg();
       if (!cfg.mt5DataDir) { log('MT5 data folder not found. Open MT5 once, close it, then restart this server.'); return done(); }
       log('MT5 found:', exe);
@@ -444,7 +469,7 @@ const appServer = http.createServer(async (req, res) => {
     if (u === '/api/run') { setRunning(j.on); return send(res, 200, { ok: true }); }
     if (u === '/api/kill') {
       L.running = false;
-      if (isCustom()) { L.stopped = true; if (process.platform === 'win32') execFile('taskkill', ['/IM', 'terminal64.exe', '/F'], () => {}); addFeed('sys', 'Stopped MT5 so the imported EA cannot trade. Open trades stay open with their broker stops.'); }
+      if (isCustom()) { L.stopped = true; L.mt5Up = false; killMt5(); addFeed('sys', 'Stopped MT5 so the imported EA cannot trade. Open trades stay open with their broker stops.'); }
       else { L.killPending = true; addFeed('sys', 'Kill switch: closing all trades'); }
       return send(res, 200, { ok: true });
     }
@@ -481,15 +506,16 @@ const eaServer = http.createServer(async (req, res) => {
   } catch (e) { return send(res, 400, { error: String(e.message || e) }); }
 });
 
-appServer.listen(cfg.appPort, '0.0.0.0', () => log(`App API on port ${cfg.appPort}`));
+appServer.listen(cfg.appPort, cfg.appHost || '0.0.0.0', () => log(`App API on port ${cfg.appPort}`));
 eaServer.on('error', e => log(e.code === 'EADDRINUSE' ? `EA bridge: port ${cfg.eaPort} is used by another program (for example IIS or a web server). Stop it, then restart Kanairy server.` : 'EA bridge error: ' + e.message));
-eaServer.listen(cfg.eaPort, '127.0.0.1', () => log(`EA bridge on 127.0.0.1:${cfg.eaPort}`));
+eaServer.listen(cfg.eaPort, cfg.eaHost || '127.0.0.1', () => log(`EA bridge on ${cfg.eaHost || '127.0.0.1'}:${cfg.eaPort}`));
 autoSetup();
-showAddress();
+if (!cfg.quiet) showAddress();
 
 // ---------- keep MT5 and the EA alive ----------
 function checkMt5() {
-  if (process.platform !== 'win32') { L.mt5Up = true; return; }
+  if (process.platform !== 'win32') { L.mt5Up = !L.stopped; return; }
+  if (cfg.portable) { execFile('powershell', ['-NoProfile', '-Command', `(${psMatch()} | Measure-Object).Count`], (err, out) => { L.mt5Up = !err && Number(String(out).trim()) > 0; }); return; }
   execFile('tasklist', ['/FI', 'IMAGENAME eq terminal64.exe', '/NH'], (err, out) => { L.mt5Up = !err && /terminal64\.exe/i.test(String(out)); });
 }
 let firstWatch = true;

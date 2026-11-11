@@ -149,14 +149,51 @@ final class Bridge {
         while (u.endsWith("/")) u = u.substring(0, u.length() - 1);
         if (!u.isEmpty() && !u.startsWith("http://") && !u.startsWith("https://")) u = "http://" + u;
         Cfg.put(act, "vps_url", u);
-        if (key != null && !key.trim().isEmpty()) Vault.put(act, "vpskey", key.trim());
+        if (key != null && !key.trim().isEmpty()) {
+            Vault.put(act, "vpskey", key.trim());
+            // A different app key means the saved sign-in no longer matches, so sign in again.
+            Cfg.put(act, "vps_user", "");
+            Vault.put(act, "userkey", "");
+        }
+    }
+
+    private static String sha256hex(String in) throws Exception {
+        byte[] d = java.security.MessageDigest.getInstance("SHA-256").digest(in.getBytes("UTF-8"));
+        StringBuilder sb = new StringBuilder();
+        for (byte x : d) sb.append(String.format("%02x", x));
+        return sb.toString();
+    }
+
+    /** The key for one person is derived from the shared app key, their name and their PIN. The PIN itself is never sent or stored. */
+    @JavascriptInterface
+    public String deriveUserKey(String t, String name, String pin) {
+        if (!ok(t)) return "";
+        try { return sha256hex(Vault.get(act, "vpskey") + ":" + name.trim().toLowerCase(java.util.Locale.ROOT) + ":" + pin); } catch (Exception e) { return ""; }
+    }
+
+    @JavascriptInterface
+    public void saveUser(String t, String name, String pin) {
+        if (!ok(t)) return;
+        String n = name == null ? "" : name.trim().toLowerCase(java.util.Locale.ROOT);
+        String k = deriveUserKey(t, n, pin == null ? "" : pin);
+        if (n.isEmpty() || k.isEmpty()) return;
+        Cfg.put(act, "vps_user", n);
+        Vault.put(act, "userkey", k);
+    }
+
+    @JavascriptInterface
+    public void clearUser(String t) {
+        if (!ok(t)) return;
+        Cfg.put(act, "vps_user", "");
+        Vault.put(act, "userkey", "");
     }
 
     @JavascriptInterface
     public String vpsInfo(String t) {
         if (!ok(t)) return "{}";
         try {
-            return new JSONObject().put("url", Cfg.s(act, "vps_url", "")).put("hasKey", Vault.has(act, "vpskey")).toString();
+            return new JSONObject().put("url", Cfg.s(act, "vps_url", "")).put("hasKey", Vault.has(act, "vpskey"))
+                .put("user", Cfg.s(act, "vps_user", "")).toString();
         } catch (Exception e) { return "{}"; }
     }
 
@@ -170,6 +207,11 @@ final class Bridge {
             try {
                 String base = Cfg.s(act, "vps_url", "");
                 String key = Vault.get(act, "vpskey");
+                String user = Cfg.s(act, "vps_user", "");
+                // Creating an account and the first hello use the shared key. Everything else is signed with this person's own key.
+                boolean shared = path.startsWith("/api/hello") || path.startsWith("/api/register");
+                if (!shared && !user.isEmpty()) key = Vault.get(act, "userkey");
+                else user = "";
                 if (base.isEmpty() || key.isEmpty()) throw new IllegalStateException("not configured");
                 String b = body == null ? "" : body;
                 String ts = String.valueOf(System.currentTimeMillis());
@@ -190,6 +232,7 @@ final class Bridge {
                 c.setRequestProperty("X-Ts", ts);
                 c.setRequestProperty("X-Nonce", nonce);
                 c.setRequestProperty("X-Sig", sig.toString());
+                if (!user.isEmpty()) c.setRequestProperty("X-User", user);
                 c.setRequestProperty("Content-Type", "application/json");
                 if (!b.isEmpty()) {
                     c.setDoOutput(true);
