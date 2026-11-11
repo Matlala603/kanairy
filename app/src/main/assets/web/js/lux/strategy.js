@@ -43,13 +43,16 @@ export function mountStrategy(root, refresh) {
   // ---- imported EA card: updates on its own while the compile runs on the server ----
   let eaTf = 'M1';
   const eaCard = h('div', { class: 'card' });
-  const eaFile = h('input', { type: 'file', accept: '.mq5', class: 'sr', onchange: async e => {
+  const b64 = buf => { const u = new Uint8Array(buf); let o = ''; for (let i = 0; i < u.length; i += 0x8000) o += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(o); };
+  const eaFile = h('input', { type: 'file', accept: '.mq5,.ex5', class: 'sr', onchange: async e => {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
-    if (/\.ex5$/i.test(f.name)) { toast('That is a compiled .ex5. Pick the .mq5 source file.'); return; }
-    if (f.size > 1.5e6) { toast('That file is too large'); return; }
+    const ex5 = /\.ex5$/i.test(f.name);
+    if (!ex5 && !/\.mq5$/i.test(f.name)) { toast('Pick a .mq5 or .ex5 file'); return; }
+    if (f.size > (ex5 ? 2e6 : 1.5e6)) { toast('That file is too large'); return; }
     toast('Sending to your server');
-    const r = await B.importEa(f.name, decode(await f.arrayBuffer()));
-    toast(r.ok ? 'Compiling on your server' : (r.error || 'Import failed')); paintEa(); } });
+    const buf = await f.arrayBuffer();
+    const r = ex5 ? await B.importEx5(f.name, b64(buf)) : await B.importEa(f.name, decode(buf));
+    toast(r.ok ? (ex5 ? 'Added to your server' : 'Compiling on your server') : (r.error || 'Import failed')); paintEa(); } });
   const setFile = h('input', { type: 'file', accept: '.set', class: 'sr', onchange: async e => {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
     const r = await B.importPreset(decode(await f.arrayBuffer()));
@@ -62,9 +65,9 @@ export function mountStrategy(root, refresh) {
   function paintEa() {
     const ea = B.ea(), custom = ea.mode === 'custom', busy = ea.state === 'compiling';
     const stateText = { none: 'No EA imported yet.', compiling: 'Compiling on your server…', ok: ea.name + ' is compiled and ready.', failed: ea.name ? ea.name + ' did not compile.' : 'Import failed.' }[ea.state] || '';
-    eaCard.replaceChildren(h('h2', {}, 'Import an EA (.mq5)'),
-      h('p', { class: 'mute small', style: { margin: '-6px 0 14px' } }, 'Pick a .mq5 source file. Your server compiles it and runs it inside MT5. Source files only, no .ex5, and no EAs that need a DLL.'),
-      h('div', { class: 'chips' }, h('button', { class: 'chip on', onclick: () => !busy && eaFile.click() }, 'Import .mq5 file'),
+    eaCard.replaceChildren(h('h2', {}, 'Import an EA (.mq5 or .ex5)'),
+      h('p', { class: 'mute small', style: { margin: '-6px 0 14px' } }, 'Pick a .mq5 source file (your server compiles it) or a compiled .ex5. It runs inside MT5 on your server. EAs that need a DLL will not work, because DLLs stay off. Only run EAs you trust and are licensed to use.'),
+      h('div', { class: 'chips' }, h('button', { class: 'chip on', onclick: () => !busy && eaFile.click() }, 'Import EA file'),
         ea.name && ea.state === 'ok' ? h('button', { class: 'chip', onclick: () => setFile.click() }, ea.hasPreset ? 'Replace .set settings' : 'Add .set settings') : null), eaFile, setFile,
       h('div', { class: 'rule', style: { marginTop: '12px' } }, h('b', {}, stateText), ea.log ? h('div', { class: 'small mute', style: { whiteSpace: 'pre-wrap', marginTop: '6px' } }, ea.log) : null),
       ea.state === 'ok' ? h('div', { style: { marginTop: '12px' } }, h('div', { class: 'faint small', style: { marginBottom: '6px' } }, 'Chart timeframe'),

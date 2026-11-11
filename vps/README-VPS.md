@@ -40,8 +40,8 @@ Then on the phone: Kanairy, Setup, enter the address and key, tap Connect. Accou
 - The EA refuses real accounts unless `allowLive` is `true` in `config.json`. Use a demo account first.
 
 ## Import your own EA (.mq5)
-In the app, Strategy tab, **Import an EA (.mq5)**. The phone sends the source file to this server, which compiles it with MetaEditor and runs it inside MT5.
-- Pick the `.mq5` **source**, not a compiled `.ex5`. EAs that need a DLL are refused (Kanairy keeps DLLs off). EAs that `#include` your own files will fail to compile; the error shows in the app.
+In the app, Strategy tab, **Import an EA**. Pick a `.mq5` source (this server compiles it with MetaEditor) or a compiled `.ex5` (copied into MT5 as it is) and it runs inside MT5.
+- An `.ex5` cannot be inspected by Kanairy, so only use ones you trust and are licensed for. EAs that need a DLL are refused (Kanairy keeps DLLs off). EAs that `#include` your own files will fail to compile; the error shows in the app.
 - Optional: add the EA's `.set` settings file, choose the chart timeframe, then tap **Run it on my VPS**. The symbol is the one set in Account.
 - An imported EA trades **by itself**. Kanairy's guard rails, the live-account lock (`allowLive`) and the Live crown do not apply to it. Use a demo account first.
 - The Live screen's stop button shuts MT5 down so the EA cannot trade. Open trades stay open with their broker stops.

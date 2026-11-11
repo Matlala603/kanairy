@@ -13,7 +13,7 @@ function req(method, path, body) {
   return new Promise(res => {
     if (!N) { res({ status: 0, text: '' }); return; }
     const id = ++seq;
-    const to = setTimeout(() => { pend.delete(id); res({ status: 0, text: 'timeout' }); }, 15000);
+    const to = setTimeout(() => { pend.delete(id); res({ status: 0, text: 'timeout' }); }, 30000);
     pend.set(id, r => { clearTimeout(to); res(r); });
     N.vps(T, id, method, path, body ? JSON.stringify(body) : '');
   });
@@ -113,6 +113,12 @@ export const B = {
     if (!linkOk()) return { ok: false, error: LINK_TEXT[C.link] };
     if (!N) { demo.ea = { mode: 'kanairy', name, state: 'ok', log: 'Preview only', hasPreset: false }; return { ok: true }; }
     const r = await req('POST', '/api/ea/import', { name, source });
+    poll(); return parse(r.text, { ok: false, error: r.status === 0 ? 'The server did not answer. Try again.' : 'Server error ' + r.status });
+  },
+  async importEx5(name, b64) {
+    if (!linkOk()) return { ok: false, error: LINK_TEXT[C.link] };
+    if (!N) { demo.ea = { mode: 'kanairy', name, state: 'ok', log: 'Preview only', hasPreset: false }; return { ok: true }; }
+    const r = await req('POST', '/api/ea/import', { name, ex5: b64 });
     poll(); return parse(r.text, { ok: false, error: r.status === 0 ? 'The server did not answer. Try again.' : 'Server error ' + r.status });
   },
   async importPreset(text) {

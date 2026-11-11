@@ -361,6 +361,26 @@ async function importEa(name, source) {
   return { ok: true, name: nm, state: 'compiling' };
 }
 
+// A compiled .ex5 is not compiled again, only copied into MT5. Kanairy cannot see inside it, so DLLs stay off and it runs only as MT5 allows.
+async function importEx5(name, b64) {
+  if (S.ea.state === 'compiling') return { ok: false, error: 'Still compiling the last file. Wait a moment.' };
+  const buf = Buffer.from(String(b64 || ''), 'base64');
+  if (buf.length < 1024) return { ok: false, error: 'That file is empty or too small to be an EA.' };
+  if (buf.length > 2e6) return { ok: false, error: 'That file is too large (limit 2 MB).' };
+  const head = buf.subarray(0, 4).toString('latin1');
+  if (head.startsWith('MZ') || head.startsWith('PK') || head.startsWith('<') || head.startsWith('\u007fELF')) return { ok: false, error: 'That is not an .ex5 file (it looks like a program, zip or web page). Unzip it and pick the .ex5 inside.' };
+  await autoSetup();
+  if (!cfg.mt5DataDir) return { ok: false, error: 'MT5 was not found on the server. Open MT5 once on the VPS first.' };
+  const nm = cleanName(name), dir = path.join(cfg.mt5DataDir, 'MQL5', 'Experts', 'Imported');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, nm + '.ex5'), buf);
+  try { fs.unlinkSync(path.join(dir, nm + '.mq5')); } catch { /* none */ }
+  if (S.ea.name !== nm) S.ea.hasPreset = false;
+  S.ea.name = nm; S.ea.state = 'ok'; S.ea.log = 'Compiled file copied to MT5. Kanairy cannot check what is inside it, and DLLs stay off.'; save();
+  addFeed('sys', `EA ${nm} (.ex5) added`);
+  return { ok: true, name: nm, state: 'ok' };
+}
+
 function importPreset(text) {
   if (!S.ea.name) return { ok: false, error: 'Import the .mq5 file first.' };
   if (typeof text !== 'string' || text.length > 2e5 || !/^[^=\n]+=/m.test(text)) return { ok: false, error: 'That does not look like an MT5 .set settings file.' };
@@ -428,7 +448,7 @@ const appServer = http.createServer(async (req, res) => {
       else { L.killPending = true; addFeed('sys', 'Kill switch: closing all trades'); }
       return send(res, 200, { ok: true });
     }
-    if (u === '/api/ea/import') return send(res, 200, await importEa(j.name, j.source));
+    if (u === '/api/ea/import') return send(res, 200, j.ex5 ? await importEx5(j.name, j.ex5) : await importEa(j.name, j.source));
     if (u === '/api/ea/preset') return send(res, 200, importPreset(j.text));
     if (u === '/api/ea/mode') return send(res, 200, setEaMode(j.mode, j.tf));
     if (u === '/api/login') {
